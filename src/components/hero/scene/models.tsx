@@ -34,8 +34,12 @@ export function useMaterials() {
       curtain: std({ map: curtainTexture(), roughness: 0.75, side: THREE.DoubleSide }),
       tabletop: std({ color: '#d8c3a0', roughness: 0.7 }),
       floor: std({ map: floorTexture(), roughness: 0.55, metalness: 0.05 }),
-      asphalt: std({ map: asphaltTexture(), roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
-      paint: std({ color: '#f1f1ec', roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }),
+      // ground layers are painted in a fixed order (see GROUND) instead of depth-tested
+      asphalt: std({ map: asphaltTexture(), roughness: 0.95, depthTest: false, depthWrite: false }),
+      paint: std({ color: '#f1f1ec', roughness: 0.8, depthTest: false, depthWrite: false }),
+      groundBlob: new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false }),
+      walkway: std({ color: '#f2c230', roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }),
+      leveller: std({ color: '#3b424c', roughness: 0.5, metalness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }),
       cladding: std({ color: '#dfe3e8', roughness: 0.6, metalness: 0.2 }),
       // dock-face pieces fade out while the camera passes through the wall
       dockWall: std({ color: '#dfe3e8', roughness: 0.6, metalness: 0.2, transparent: true }),
@@ -48,11 +52,14 @@ export function useMaterials() {
       beam: std({ color: '#f07c1b', roughness: 0.5, metalness: 0.3 }),
       tree: std({ color: '#6f8d5e', roughness: 1 }),
       trunk: std({ color: '#6b513a', roughness: 1 }),
-      blob: new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }),
+      blob: new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -12 }),
     }
   }, [])
 }
 export type Mats = ReturnType<typeof useMaterials>
+
+/** Draw order for flat ground layers (sea → land → fields → tarmac → markings → shadows). */
+export const GROUND = { sea: -10, land: -9, fields: -8, asphalt: -7, paint: -6, shadow: -5 }
 
 /* ------------------------------------------------------------------ */
 /* The parcel: walls, four hinged flaps, tape, label and the products  */
@@ -368,7 +375,7 @@ export function Forklift({ refs, m, children }: { refs: ForkliftRefs; m: Mats; c
 /* ------------------------------------------------------------------ */
 /* Articulated curtain-side lorry (rear at z = 0, cab towards +z)      */
 /* ------------------------------------------------------------------ */
-export type LorryRefs = { root: G; doorL: G; doorR: G; curtainL: G; curtainR: G; body: G; token: G }
+export type LorryRefs = { root: G; doorL: G; doorR: G; curtainL: G; curtainR: G; body: G; token: G; shadow: M }
 
 const TR_L = 13.6
 const TR_W = 2.55
@@ -406,7 +413,7 @@ export function Lorry({ refs, m }: { refs: LorryRefs; m: Mats }) {
         </mesh>
       </group>
       <group ref={refs.body}>
-        <mesh material={m.blob} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 8.2]}>
+        <mesh ref={refs.shadow} material={m.groundBlob} renderOrder={GROUND.shadow} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 8.2]}>
           <planeGeometry args={[4.2, 18.5]} />
         </mesh>
         {/* trailer bed + chassis */}
@@ -557,17 +564,16 @@ export function Warehouse({ m }: { m: Mats }) {
   return (
     <group>
       {/* dock slab with polished floor */}
-      <mesh material={m.concrete} position={[cx, DOCK_H / 2, cz]}>
-        <boxGeometry args={[width, DOCK_H, depth]} />
+      <mesh material={m.concrete} position={[cx, (DOCK_H - 0.03) / 2, cz]}>
+        <boxGeometry args={[width, DOCK_H - 0.03, depth]} />
       </mesh>
-      <mesh material={m.floor} position={[cx, DOCK_H + 0.002, cz]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh material={m.floor} position={[cx, DOCK_H, cz]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[width, depth]} />
       </mesh>
       {/* walkway lines */}
       {[-3.4, 3.4].map((x) => (
-        <mesh key={x} position={[x, DOCK_H + 0.004, -16]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh key={x} material={m.walkway} position={[x, DOCK_H + 0.01, -16]} rotation={[-Math.PI / 2, 0, 0]}>
           <planeGeometry args={[0.12, 28]} />
-          <meshStandardMaterial color="#f2c230" roughness={0.6} />
         </mesh>
       ))}
       {/* dock face wall */}
@@ -593,7 +599,7 @@ export function Warehouse({ m }: { m: Mats }) {
               <boxGeometry args={[0.25, 0.4, 0.22]} />
             </mesh>
           ))}
-          <mesh material={m.darkSteel} position={[0, DOCK_H + 0.01, 0.2]} rotation={[-Math.PI / 2, 0, 0]}>
+          <mesh material={m.leveller} position={[0, DOCK_H + 0.015, 0.2]} rotation={[-Math.PI / 2, 0, 0]}>
             <planeGeometry args={[2.4, 0.6]} />
           </mesh>
           <mesh material={m.dockBand} position={[0, DOCK_H + DOOR_H + 0.1, 0.24]}>
@@ -728,28 +734,28 @@ export function Yard({ m }: { m: Mats }) {
   return (
     <group>
       {/* yard apron */}
-      <mesh material={m.asphalt} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 46]}>
+      <mesh material={m.asphalt} renderOrder={GROUND.asphalt} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 46]}>
         <planeGeometry args={[100, 92]} />
       </mesh>
       {/* service road around the building */}
-      <mesh material={m.asphalt} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, -19]}>
+      <mesh material={m.asphalt} renderOrder={GROUND.asphalt} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, -19]}>
         <planeGeometry args={[80, 42]} />
       </mesh>
       {/* bay lines */}
       {[...BAY_X.map((x) => x - 4), BAY_X[BAY_X.length - 1] + 4].map((x) => (
-        <mesh key={x} material={m.paint} rotation={[-Math.PI / 2, 0, 0]} position={[x, 0.02, 10]}>
+        <mesh key={x} material={m.paint} renderOrder={GROUND.paint} rotation={[-Math.PI / 2, 0, 0]} position={[x, 0.02, 10]}>
           <planeGeometry args={[0.18, 20]} />
         </mesh>
       ))}
-      <mesh material={m.paint} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 20.2]}>
+      <mesh material={m.paint} renderOrder={GROUND.paint} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 20.2]}>
         <planeGeometry args={[60, 0.2]} />
       </mesh>
       {/* access road heading south to the main road */}
-      <mesh material={m.asphalt} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 260]}>
+      <mesh material={m.asphalt} renderOrder={GROUND.asphalt} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 260]}>
         <planeGeometry args={[14, 340]} />
       </mesh>
       {Array.from({ length: 24 }, (_, i) => (
-        <mesh key={i} material={m.paint} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 100 + i * 14]}>
+        <mesh key={i} material={m.paint} renderOrder={GROUND.paint} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 100 + i * 14]}>
           <planeGeometry args={[0.18, 6]} />
         </mesh>
       ))}

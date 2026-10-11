@@ -4,6 +4,7 @@ import { useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { UK, IRELAND } from '../ukGeo'
+import { GROUND } from './models'
 import { BRAND, CITIES, MOTORWAYS, ll, ramp, type Route } from './world'
 
 type Progress = { current: number }
@@ -28,8 +29,10 @@ function Fields() {
     const count = 420
     const geo = new THREE.PlaneGeometry(1, 1)
     geo.rotateX(-Math.PI / 2)
-    const mat = new THREE.MeshStandardMaterial({ roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })
+    const mat = new THREE.MeshStandardMaterial({ roughness: 1, depthTest: false, depthWrite: false })
     const inst = new THREE.InstancedMesh(geo, mat, count)
+    inst.renderOrder = GROUND.fields
+    inst.frustumCulled = false
     const o = new THREE.Object3D()
     const palette = ['#b9c8a5', '#c7d1ad', '#d6d3a6', '#aebf98', '#c2cca0', '#d9dcc0'].map((c) => new THREE.Color(c))
     let s = 11
@@ -123,8 +126,8 @@ export function MapLayer({ progress, routes, departures, labels }: { progress: P
   const uk = useLand(UK)
   const ie = useLand(IRELAND)
   const { size } = useThree()
-  const landMat = useMemo(() => new THREE.MeshStandardMaterial({ color: BRAND.land, roughness: 1 }), [])
-  const irelandMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#c3cbbb', roughness: 1 }), [])
+  const landMat = useMemo(() => new THREE.MeshStandardMaterial({ color: BRAND.land, roughness: 1, depthTest: false, depthWrite: false }), [])
+  const irelandMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#c3cbbb', roughness: 1, depthTest: false, depthWrite: false }), [])
   const coastMat = useMemo(() => new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0 }), [])
   const markers = useRef<(THREE.Group | null)[]>([])
   const lift = useRef<THREE.Group>(null)
@@ -208,13 +211,13 @@ export function MapLayer({ progress, routes, departures, labels }: { progress: P
   return (
     <group>
       {/* sea */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-100000, -40, -250000]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-100000, -40, -250000]} renderOrder={GROUND.sea}>
         <planeGeometry args={[9e6, 9e6]} />
-        <meshStandardMaterial color={BRAND.sea} roughness={0.9} />
+        <meshStandardMaterial color={BRAND.sea} roughness={0.9} depthTest={false} depthWrite={false} />
       </mesh>
       {/* land */}
-      <mesh geometry={ie.g} material={irelandMat} position={[0, -0.06, 0]} />
-      <mesh geometry={uk.g} material={landMat} position={[0, -0.05, 0]} />
+      <mesh geometry={ie.g} material={irelandMat} position={[0, -0.06, 0]} renderOrder={GROUND.land} />
+      <mesh geometry={uk.g} material={landMat} position={[0, -0.05, 0]} renderOrder={GROUND.land} />
       {uk.outline.map((g, i) => (
         <lineLoop key={i} geometry={g} material={coastMat} position={[0, 2, 0]} />
       ))}

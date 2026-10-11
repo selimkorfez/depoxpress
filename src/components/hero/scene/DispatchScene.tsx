@@ -108,6 +108,7 @@ const makeLorryRefs = (): LorryRefs => ({
   curtainL: { current: null },
   curtainR: { current: null },
   token: { current: null },
+  shadow: { current: null },
 })
 
 /* scratch objects (no allocations per frame) */
@@ -324,6 +325,7 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
       }
       root.scale.setScalar(scale)
       if (L.token.current) L.token.current.visible = scale > 25
+      if (L.shadow.current) L.shadow.current.visible = scale < 2
       const doors = ramp(p, ...T.doors)
       const openA = Math.PI * 1.46
       if (L.doorL.current) L.doorL.current.rotation.y = lerp(openA, 0, doors)
