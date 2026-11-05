@@ -1,4 +1,5 @@
 import { Archivo, IBM_Plex_Mono } from 'next/font/google'
+import { Analytics } from '@vercel/analytics/next'
 import '@/app/globals.css'
 import { getDict } from '@/content'
 import { href, type Locale } from '@/lib/routes'
@@ -78,6 +79,7 @@ export function SiteShell({ locale, children }: { locale: Locale; children: Reac
         </a>
         <ScrollFX />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+        <Analytics />
       </body>
     </html>
   )
