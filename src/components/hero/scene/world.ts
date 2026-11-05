@@ -114,8 +114,35 @@ export const T = {
   arrive: 0.955,
 }
 
-/** Story panels switch at these progress values (headline + 4 steps). */
-export const PANEL_STARTS = [0, 0.06, 0.2, 0.36, 0.64]
+/**
+ * Story stages (headline + 4 cards). Each stage owns a scroll range; the
+ * boundaries below are where one card hands over to the next. Around each
+ * boundary the outgoing card leaves during [b - HANDOVER, b] and the incoming
+ * card arrives during [b, b + HANDOVER], so two cards are never on screen
+ * together. Everything else is a resting interval.
+ */
+export const STAGE_BOUNDS = [0.075, 0.2, 0.36, 0.64]
+export const HANDOVER = 0.016
+
+/** Index of the stage that owns progress p. */
+export function stageAt(p: number) {
+  let i = 0
+  while (i < STAGE_BOUNDS.length && p >= STAGE_BOUNDS[i]) i++
+  return i
+}
+
+const smooth01 = (x: number) => {
+  const t = Math.min(1, Math.max(0, x))
+  return t * t * (3 - 2 * t)
+}
+
+/** Visibility of stage i at progress p: 0 → 1 while arriving, 1 at rest, 1 → 0 while leaving. */
+export function stageIn(i: number, p: number) {
+  return i === 0 ? 1 : smooth01((p - STAGE_BOUNDS[i - 1]) / HANDOVER)
+}
+export function stageOut(i: number, p: number) {
+  return i >= STAGE_BOUNDS.length ? 0 : smooth01((p - (STAGE_BOUNDS[i] - HANDOVER)) / HANDOVER)
+}
 
 /* ------------------------------------------------------------------ */
 /* Routes                                                              */
@@ -195,11 +222,13 @@ export const CAMERA_KEYS: Key[] = [
   { p: 0.2, target: [0, DOCK_H + 1.05, -9.5], az: -14 * deg, el: 40 * deg, dist: 2.7 },
   { p: 0.3, target: [0.3, DOCK_H + 1.1, -9.4], az: 10 * deg, el: 26 * deg, dist: 3.4 },
   { p: 0.37, target: [1.2, DOCK_H + 0.9, -8.6], az: 32 * deg, el: 26 * deg, dist: 6.4 },
-  { p: 0.43, target: [0.3, DOCK_H + 1.0, -3.2], az: 140 * deg, el: 30 * deg, dist: 8 },
-  { p: 0.48, target: [-0.6, DOCK_H + 1.1, 2.6], az: 172 * deg, el: 17 * deg, dist: 7.2 },
-  { p: 0.505, target: [-0.6, DOCK_H + 1.1, 2.8], az: 176 * deg, el: 16 * deg, dist: 7.4 },
-  { p: 0.535, target: [-0.2, DOCK_H + 1.0, 3.6], az: 74 * deg, el: 28 * deg, dist: 15 },
-  { p: 0.58, target: [0, 1.6, 5], az: 52 * deg, el: 28 * deg, dist: 30 },
+  { p: 0.44, target: [0.3, DOCK_H + 1.0, -3.2], az: 140 * deg, el: 30 * deg, dist: 8 },
+  { p: 0.485, target: [-0.6, DOCK_H + 1.1, 2.6], az: 172 * deg, el: 12 * deg, dist: 7.2 },
+  { p: 0.5, target: [-0.6, DOCK_H + 1.1, 2.8], az: 176 * deg, el: 12 * deg, dist: 7.4 },
+  // swing out beside the trailer — the dock face is a cutaway from inside, so nothing blocks the view
+  { p: 0.524, target: [-0.4, DOCK_H + 1.0, 3.4], az: 122 * deg, el: 26 * deg, dist: 12 },
+  { p: 0.552, target: [-0.2, DOCK_H + 1.0, 4.2], az: 84 * deg, el: 36 * deg, dist: 22 },
+  { p: 0.59, target: [0, 1.6, 5], az: 60 * deg, el: 36 * deg, dist: 36 },
   { p: 0.63, target: [0, 1, 6], az: 34 * deg, el: 38 * deg, dist: 78 },
   { p: 0.7, target: [0, 0, 30], az: 18 * deg, el: 50 * deg, dist: 260 },
   { p: 0.8, target: [UK_CENTRE.x * 0.04, 0, UK_CENTRE.z * 0.04], az: 8 * deg, el: 66 * deg, dist: 42000 },
@@ -207,25 +236,58 @@ export const CAMERA_KEYS: Key[] = [
   { p: 1.0, target: [UK_CENTRE.x, 0, UK_CENTRE.z], az: 0, el: 86 * deg, dist: 1.6e6 },
 ]
 
-const tmpA = new THREE.Vector3()
-const tmpB = new THREE.Vector3()
+/* Monotone cubic (Fritsch–Carlson) interpolation per camera channel: smooth
+   velocity through every key, no overshoot, and a gentle start and finish.
+   Keys only stop the camera where a channel genuinely changes direction. */
+const KEY_P = CAMERA_KEYS.map((k) => k.p)
+function slopes(ys: number[]) {
+  const n = ys.length
+  const d: number[] = []
+  for (let i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / (KEY_P[i + 1] - KEY_P[i]))
+  const m = new Array<number>(n).fill(0)
+  for (let i = 1; i < n - 1; i++) {
+    if (d[i - 1] * d[i] <= 0) continue
+    const h0 = KEY_P[i] - KEY_P[i - 1]
+    const h1 = KEY_P[i + 1] - KEY_P[i]
+    m[i] = (3 * (h0 + h1)) / ((2 * h1 + h0) / d[i - 1] + (h1 + 2 * h0) / d[i])
+  }
+  return m
+}
+type Channel = { y: number[]; m: number[] }
+const channel = (ys: number[]): Channel => ({ y: ys, m: slopes(ys) })
+const CH = {
+  tx: channel(CAMERA_KEYS.map((k) => k.target[0])),
+  ty: channel(CAMERA_KEYS.map((k) => k.target[1])),
+  tz: channel(CAMERA_KEYS.map((k) => k.target[2])),
+  az: channel(CAMERA_KEYS.map((k) => k.az)),
+  el: channel(CAMERA_KEYS.map((k) => k.el)),
+  ld: channel(CAMERA_KEYS.map((k) => Math.log(k.dist))),
+}
+function hermite(c: Channel, i: number, u: number, h: number) {
+  const u2 = u * u
+  const u3 = u2 * u
+  return (2 * u3 - 3 * u2 + 1) * c.y[i] + (u3 - 2 * u2 + u) * h * c.m[i] + (-2 * u3 + 3 * u2) * c.y[i + 1] + (u3 - u2) * h * c.m[i + 1]
+}
+
 /** Camera rig state at progress p: target + spherical offset with log-interpolated distance. */
 export function cameraAt(p: number, outPos: THREE.Vector3, outTarget: THREE.Vector3) {
+  const q = Math.min(1, Math.max(0, p))
   let i = 0
-  while (i < CAMERA_KEYS.length - 2 && p > CAMERA_KEYS[i + 1].p) i++
+  while (i < KEY_P.length - 2 && q > KEY_P[i + 1]) i++
+  const h = KEY_P[i + 1] - KEY_P[i]
+  const u = (q - KEY_P[i]) / h
   const k0 = CAMERA_KEYS[i]
   const k1 = CAMERA_KEYS[i + 1]
-  const raw = clamp01((p - k0.p) / (k1.p - k0.p))
-  const t = raw * raw * (3 - 2 * raw)
-  tmpA.set(...k0.target)
-  tmpB.set(...k1.target)
-  const dist = Math.exp(lerp(Math.log(k0.dist), Math.log(k1.dist), t))
-  // on big zooms the target moves in step with the view size, so what's in frame stays in frame
-  const big = k1.dist / k0.dist > 20
-  const tt = big ? (dist - k0.dist) / (k1.dist - k0.dist) : t
-  outTarget.copy(tmpA).lerp(tmpB, tt)
-  const az = lerp(k0.az, k1.az, t)
-  const el = lerp(k0.el, k1.el, t)
+  const dist = Math.exp(hermite(CH.ld, i, u, h))
+  if (k1.dist / k0.dist > 20) {
+    // on big zooms the target moves in step with the view size, so what's in frame stays in frame
+    const f = (dist - k0.dist) / (k1.dist - k0.dist)
+    outTarget.set(lerp(k0.target[0], k1.target[0], f), lerp(k0.target[1], k1.target[1], f), lerp(k0.target[2], k1.target[2], f))
+  } else {
+    outTarget.set(hermite(CH.tx, i, u, h), hermite(CH.ty, i, u, h), hermite(CH.tz, i, u, h))
+  }
+  const az = hermite(CH.az, i, u, h)
+  const el = hermite(CH.el, i, u, h)
   outPos.set(Math.sin(az) * Math.cos(el) * dist, Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist).add(outTarget)
   return dist
 }

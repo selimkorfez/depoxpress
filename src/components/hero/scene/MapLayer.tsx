@@ -117,12 +117,48 @@ function ribbonMaterial(color: string) {
 
 const pv = new THREE.Vector3()
 
+type LabelState = { o: string; x: number; y: number; arrived: string }
+
+/** Projects a world point to a DOM label; only writes styles that changed. */
+function placeLabel(el: HTMLDivElement, st: LabelState, at: THREE.Vector3, opacity: number, camera: THREE.Camera, w: number, h: number) {
+  pv.copy(at).project(camera)
+  const onScreen = pv.z < 1 && Math.abs(pv.x) < 1.2 && Math.abs(pv.y) < 1.2
+  const o = onScreen ? (Math.round(opacity * 100) / 100).toString() : '0'
+  if (o !== st.o) {
+    el.style.opacity = o
+    st.o = o
+  }
+  if (o === '0') return
+  const x = Math.round(((pv.x + 1) / 2) * w * 10) / 10
+  const y = Math.round(((1 - pv.y) / 2) * h * 10) / 10
+  if (x !== st.x || y !== st.y) {
+    el.style.transform = `translate3d(${x}px, ${y}px, 0)`
+    st.x = x
+    st.y = y
+  }
+}
+
 /**
  * The UK underneath everything: land, sea, the routes each lorry draws as it
  * travels, destination markers, and the DOM labels (projected here each frame,
  * after the camera has moved).
  */
-export function MapLayer({ progress, routes, departures, labels }: { progress: Progress; routes: Route[]; departures: number[]; labels: LabelRefs }) {
+export function MapLayer({
+  progress,
+  still,
+  stillAt,
+  routes,
+  departures,
+  labels,
+}: {
+  progress: Progress
+  still: boolean
+  stillAt: number
+  routes: Route[]
+  departures: number[]
+  labels: LabelRefs
+}) {
+  const labelState = useMemo<LabelState[]>(() => Array.from({ length: routes.length + 1 }, () => ({ o: '', x: NaN, y: NaN, arrived: '' })), [routes])
   const uk = useLand(UK)
   const ie = useLand(IRELAND)
   const { size } = useThree()
@@ -162,7 +198,7 @@ export function MapLayer({ progress, routes, departures, labels }: { progress: P
   )
 
   useFrame(({ camera }) => {
-    const p = progress.current
+    const p = still ? stillAt : progress.current
     const camDist = Math.max(1, camera.position.y)
     const show = ramp(p, 0.72, 0.84)
     coastMat.opacity = ramp(p, 0.8, 0.9) * 0.7
@@ -171,7 +207,8 @@ export function MapLayer({ progress, routes, departures, labels }: { progress: P
     roads.mat.uniforms.uWidth.value = camDist * 0.0026
     roads.mat.uniforms.uOpacity.value = ramp(p, 0.72, 0.8) * 0.85
 
-    routes.forEach((r, i) => {
+    for (let i = 0; i < routes.length; i++) {
+      const r = routes[i]
       const u = (p - departures[i]) / (0.955 - departures[i])
       const rib = routePoints[i]
       const a = Math.log(r.length / 4)
@@ -188,24 +225,21 @@ export function MapLayer({ progress, routes, departures, labels }: { progress: P
       }
       const el = labels.current[i + 1]
       if (el) {
-        el.dataset.arrived = arrived ? 'true' : 'false'
-        place(el, CITIES[r.city], show)
+        const st = labelState[i + 1]
+        const flag = arrived ? 'true' : 'false'
+        if (flag !== st.arrived) {
+          el.dataset.arrived = flag
+          st.arrived = flag
+        }
+        placeLabel(el, st, CITIES[r.city], show, camera, size.width, size.height)
       }
-    })
+    }
     if (pin.current) {
       pin.current.scale.setScalar(Math.max(1, camDist * 0.0045))
       pin.current.visible = p > 0.66
     }
     const home = labels.current[0]
-    if (home) place(home, CITIES.hinckley, ramp(p, 0.68, 0.76))
-
-    function place(el: HTMLDivElement, at: THREE.Vector3, opacity: number) {
-      pv.copy(at).project(camera)
-      const onScreen = pv.z < 1 && Math.abs(pv.x) < 1.2 && Math.abs(pv.y) < 1.2
-      el.style.opacity = onScreen ? String(opacity) : '0'
-      if (!onScreen || opacity <= 0) return
-      el.style.transform = `translate3d(${((pv.x + 1) / 2) * size.width}px, ${((1 - pv.y) / 2) * size.height}px, 0)`
-    }
+    if (home) placeLabel(home, labelState[0], CITIES.hinckley, ramp(p, 0.68, 0.76), camera, size.width, size.height)
   })
 
   return (

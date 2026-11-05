@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Environment, Lightformer, PerformanceMonitor } from '@react-three/drei'
 import * as THREE from 'three'
@@ -72,6 +72,9 @@ const FORK_PATH = new THREE.CatmullRomCurve3(
   'centripetal',
 )
 const FORK_BACK = new THREE.Vector3(-0.62, DOCK_H, -3.4)
+const FORK_END = FORK_PATH.getPointAt(1)
+/** Pallet slot positions, computed once (slotLocal allocates). */
+const SLOT_POS = Array.from({ length: SLOTS }, (_, s) => slotLocal(s))
 
 /** Initial and final fill for every lorry (fraction of the 20 pallet slots). */
 const FILL_FROM = [0.3, 0.55, 0.2, 0.8, 0.45, 0.25, 0.6]
@@ -123,23 +126,36 @@ const up = new THREE.Vector3(0, 1, 0)
 const one = new THREE.Vector3(1, 1, 1)
 const camPos = new THREE.Vector3()
 const camTarget = new THREE.Vector3()
+const seat = new THREE.Vector3(0.2, PALLET_H + HERO_STACK_H, 0.25)
+const smoothPointer = new THREE.Vector2()
+/** Story card width on the side-by-side layout (matches .hero3d-card in globals.css). */
+const CARD_WIDTH = 440
+const smoothstep = (e0: number, e1: number, x: number) => {
+  const t = clamp01((x - e0) / (e1 - e0))
+  return t * t * (3 - 2 * t)
+}
 
-/** Runs before everything else each frame: smooths progress and places the camera. */
-function CameraRig({ progress, smooth, still, stillAt, m, state }: { progress: Progress; smooth: Progress; still: boolean; stillAt: number; m: ReturnType<typeof useMaterials>; state: { dist: number } }) {
+/** Runs before everything else each frame: places the camera from the displayed progress. */
+function CameraRig({ progress, still, stillAt, m, state }: { progress: Progress; still: boolean; stillAt: number; m: ReturnType<typeof useMaterials>; state: { dist: number } }) {
   const { camera, scene } = useThree()
+  const finePointer = useMemo(() => typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches, [])
   useFrame(({ pointer }, dt) => {
-    const target = still ? stillAt : progress.current
-    smooth.current += (target - smooth.current) * Math.min(1, dt * 4.5)
-    const p = smooth.current
+    // progress is already damped by the master loop in HeroScroll — read it as-is
+    const p = still ? stillAt : progress.current
     const cam = camera as THREE.PerspectiveCamera
     const dist = cameraAt(p, camPos, camTarget)
     state.dist = dist
-    if (!still && p < 0.62) {
-      // a touch of parallax while we're close in
-      const k = dist * 0.035 * (1 - ramp(p, 0.5, 0.62))
-      v1.subVectors(camTarget, camPos).normalize()
-      v2.crossVectors(v1, up).normalize()
-      camPos.addScaledVector(v2, pointer.x * k).addScaledVector(up, pointer.y * k * 0.6)
+    if (!still && finePointer) {
+      // a touch of pointer parallax while we're close in, eased by elapsed time
+      const k = 1 - Math.exp(-3 * Math.min(dt, 0.1))
+      smoothPointer.x += (pointer.x - smoothPointer.x) * k
+      smoothPointer.y += (pointer.y - smoothPointer.y) * k
+      const amount = dist * 0.03 * (1 - ramp(p, 0.45, 0.58))
+      if (amount > 0) {
+        v1.subVectors(camTarget, camPos).normalize()
+        v2.crossVectors(v1, up).normalize()
+        camPos.addScaledVector(v2, smoothPointer.x * amount).addScaledVector(up, smoothPointer.y * amount * 0.6)
+      }
     }
     cam.position.copy(camPos)
     cam.up.copy(up)
@@ -152,13 +168,6 @@ function CameraRig({ progress, smooth, still, stillAt, m, state }: { progress: P
       cam.updateProjectionMatrix()
     }
     cam.updateMatrixWorld()
-    // fade the dock wall while the camera is passing through it
-    const wallFade = clamp01((Math.abs(camPos.z - 0.1) - 0.6) / 2.2)
-    for (const mat of [m.dockWall, m.dockBand, m.sign]) {
-      mat.opacity = wallFade
-      mat.depthWrite = wallFade > 0.98
-      mat.visible = wallFade > 0.02
-    }
     const fog = scene.fog as THREE.Fog | null
     if (fog) {
       fog.near = dist * 4.5
@@ -177,7 +186,6 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
   const heroPallet = useRef<THREE.Group>(null)
   const routes = useMemo(() => BAY_X.map((_, i) => buildRoute(i)), [])
   const departures = useMemo(() => BAY_X.map((_, i) => departStart(i)), [])
-  const smooth = useRef(still ? stillAt : 0)
   const camState = useMemo(() => ({ dist: 1 }), [])
   const { camera, size, scene, gl } = useThree()
 
@@ -203,22 +211,31 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
     }
   }, [scene])
 
+  // Framing changes continuously with the viewport shape, so resizing never jumps:
+  // landscape pushes the subject right of the copy, portrait lifts it above the card.
   useEffect(() => {
     const cam = camera as THREE.PerspectiveCamera
-    const aspect = size.width / size.height
-    if (aspect > 1.15) {
-      cam.setViewOffset(size.width, size.height, -size.width * Math.min(0.2, 0.1 + (aspect - 1.15) * 0.15), 0, size.width, size.height)
-    } else if (aspect < 0.9) {
-      cam.setViewOffset(size.width, size.height, 0, size.height * 0.17, size.width, size.height)
+    const { width: w, height: h } = size
+    const aspect = w / h
+    let dx = 0
+    let dy = 0
+    if (w > 900) {
+      // side-by-side layout: centre the subject in the space to the right of the cards
+      const gutter = Math.min(48, Math.max(16, w * 0.04))
+      dx = (gutter + CARD_WIDTH) / 2
     } else {
-      cam.clearViewOffset()
+      // stacked layout: cards sit at the bottom, so lift the subject into the upper area
+      dy = h * lerp(0.16, 0.08, smoothstep(0.62, 1.1, aspect))
     }
-    cam.fov = aspect < 0.75 ? 52 : aspect < 1.15 ? 44 : 36
+    cam.setViewOffset(w, h, -dx, dy, w, h)
+    cam.fov = lerp(50, 36, smoothstep(0.6, 1.45, aspect))
     cam.updateProjectionMatrix()
   }, [camera, size])
 
+  const lorryMatrices = useMemo(() => BAY_X.map(() => new THREE.Matrix4()), [])
+
   useFrame(({ clock }) => {
-    const p = smooth.current
+    const p = still ? stillAt : progress.current
     const t = still ? 0 : clock.elapsedTime
     const dist = camState.dist
 
@@ -226,8 +243,9 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
     const items = parcel.items.current
     const drop = T.itemsDrop
     const slice = (drop[1] - drop[0]) / items.length
-    items.forEach((it, i) => {
-      if (!it) return
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      if (!it) continue
       const a = drop[0] + i * slice * 0.92
       const k = ramp(p, a, a + slice * 1.25)
       const s = ITEM_START[i]
@@ -243,7 +261,7 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
         it.rotation.set(0, Math.sin(k * Math.PI) * 0.8, Math.sin(k * Math.PI) * 0.6)
         it.visible = p < T.flapsLong[1] + 0.01
       }
-    })
+    }
     const shortK = ramp(p, ...T.flapsShort)
     const longK = ramp(p, ...T.flapsLong)
     const wobble = still ? 0 : Math.sin(t * 2.2) * 0.05 * (1 - shortK)
@@ -285,13 +303,14 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
     const backK = ramp(p, ...T.reverse)
     if (fk) {
       if (backK > 0) {
-        const end = FORK_PATH.getPointAt(1)
-        fk.position.lerpVectors(end, FORK_BACK, backK)
+        fk.position.lerpVectors(FORK_END, FORK_BACK, backK)
         fk.rotation.set(0, Math.sin(backK * Math.PI) * -0.12, 0)
       } else {
         FORK_PATH.getPointAt(driveK, fk.position)
-        FORK_PATH.getTangentAt(Math.min(0.999, Math.max(0.001, driveK)), v1)
-        fk.rotation.set(0, Math.atan2(v1.x, v1.z), 0)
+        // heading from two nearby samples (getTangentAt allocates)
+        FORK_PATH.getPointAt(Math.min(1, driveK + 0.004), v1)
+        FORK_PATH.getPointAt(Math.max(0, driveK - 0.004), v2)
+        fk.rotation.set(0, Math.atan2(v1.x - v2.x, v1.z - v2.z), 0)
       }
     }
     if (fork.carriage.current) {
@@ -302,12 +321,14 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
     if (fork.beacon.current) (fork.beacon.current.material as THREE.MeshStandardMaterial).emissiveIntensity = still ? 2 : 1 + Math.max(0, Math.sin(t * 9)) * 3
 
     /* ---------------- lorries ---------------- */
-    const lorryMatrices: THREE.Matrix4[] = []
-    BAY_X.forEach((x, i) => {
+    const pull = ramp(p, 0.555, 0.585)
+    const doors = ramp(p, ...T.doors)
+    const openA = Math.PI * 1.46
+    for (let i = 0; i < BAY_X.length; i++) {
+      const x = BAY_X[i]
       const L = lorries[i]
       const root = L.root.current
-      if (!root) return
-      const pull = ramp(p, 0.555, 0.585)
+      if (!root) continue
       const start = departures[i]
       const r = routes[i]
       const u = clamp01((p - start) / (T.arrive - start))
@@ -316,8 +337,10 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
         const d = travelled(u, r.length)
         const k = Math.max(0.00001, Math.min(0.99999, d / r.length))
         r.curve.getPointAt(k, root.position)
-        r.curve.getTangentAt(k, v1)
-        root.rotation.set(0, Math.atan2(v1.x, v1.z), 0)
+        const e = Math.min(0.0005, k * 0.5)
+        r.curve.getPointAt(Math.min(1, k + e), v1)
+        r.curve.getPointAt(Math.max(0, k - e), v2)
+        root.rotation.set(0, Math.atan2(v1.x - v2.x, v1.z - v2.z), 0)
         scale = 1 + Math.max(0, dist / 520 - 1) * ramp(d, 40, 600)
       } else {
         root.position.set(x, 0, TRAILER_REAR_Z + PULL * pull)
@@ -326,23 +349,20 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
       root.scale.setScalar(scale)
       if (L.token.current) L.token.current.visible = scale > 25
       if (L.shadow.current) L.shadow.current.visible = scale < 2
-      const doors = ramp(p, ...T.doors)
-      const openA = Math.PI * 1.46
       if (L.doorL.current) L.doorL.current.rotation.y = lerp(openA, 0, doors)
       if (L.doorR.current) L.doorR.current.rotation.y = lerp(-openA, 0, doors)
       const cur = ramp(p, T.curtains[0] + i * 0.002, T.curtains[1])
       if (L.curtainL.current) L.curtainL.current.scale.x = lerp(0.07, 1, cur)
       if (L.curtainR.current) L.curtainR.current.scale.x = lerp(0.07, 1, cur)
       root.updateMatrix()
-      lorryMatrices[i] = root.matrix
-    })
+      lorryMatrices[i].copy(root.matrix)
+    }
 
     /* ---------------- cargo inside the trailers ---------------- */
     let n = 0
-    BAY_X.forEach((_, i) => {
+    const hidden = ramp(p, T.curtains[1], T.curtains[1] + 0.01) * ramp(p, T.doors[1], T.doors[1] + 0.01)
+    for (let i = 0; i < BAY_X.length; i++) {
       const lm = lorryMatrices[i]
-      if (!lm) return
-      const hidden = ramp(p, T.curtains[1], T.curtains[1] + 0.01) * ramp(p, T.doors[1], T.doors[1] + 0.01)
       for (let s = 0; s < SLOTS; s++) {
         let vis: number
         if (i === HERO_BAY) {
@@ -356,15 +376,14 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
           vis = clamp01(filled - s)
         }
         const sc = vis <= 0 || hidden >= 1 ? 0 : vis >= 1 ? 1 : easeOutBack(vis)
-        v3.copy(slotLocal(s))
-        m2.compose(v3, q1.identity(), one)
+        m2.compose(SLOT_POS[s], q1.identity(), one)
         m3.makeScale(sc || 0.00001, sc || 0.00001, sc || 0.00001)
         m1.multiplyMatrices(lm, m2).multiply(m3)
         cargo.stack.setMatrixAt(n, m1)
         cargo.base.setMatrixAt(n, m1)
         n++
       }
-    })
+    }
     cargo.stack.count = n
     cargo.base.count = n
     cargo.stack.instanceMatrix.needsUpdate = true
@@ -378,12 +397,9 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
         fork.load.current.matrixWorld.decompose(hp.position, hp.quaternion, hp.scale)
       }
       if (backK > 0) {
-        const lm = lorryMatrices[HERO_BAY]
-        if (lm) {
-          m2.compose(slotLocal(HERO_SLOT), q1.identity(), one)
-          m1.multiplyMatrices(lm, m2)
-          m1.decompose(hp.position, hp.quaternion, hp.scale)
-        }
+        m2.compose(SLOT_POS[HERO_SLOT], q1.identity(), one)
+        m1.multiplyMatrices(lorryMatrices[HERO_BAY], m2)
+        m1.decompose(hp.position, hp.quaternion, hp.scale)
       }
       hp.updateMatrix()
       hp.visible = ramp(p, T.curtains[1], T.curtains[1] + 0.01) < 1 || ramp(p, T.doors[1], T.doors[1] + 0.01) < 1
@@ -396,7 +412,7 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
       const tableY = TABLE.y + TABLE_TOP
       const tableZ = TABLE.z
       // seat on top of the hero pallet's stack (pallet-local)
-      m2.compose(v3.set(0.2, PALLET_H + HERO_STACK_H, 0.25), q1.identity(), one)
+      m2.compose(seat, q1.identity(), one)
       m1.multiplyMatrices(hp.matrix, m2)
       m1.decompose(v2, q1, v1)
       const k = ramp(p, ...T.boxToPallet)
@@ -419,7 +435,7 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
 
   return (
     <group>
-      <CameraRig progress={progress} smooth={smooth} still={still} stillAt={stillAt} m={m} state={camState} />
+      <CameraRig progress={progress} still={still} stillAt={stillAt} m={m} state={camState} />
       <Warehouse m={m} />
       <Yard m={m} />
       <PackingTable m={m} />
@@ -433,37 +449,56 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
       ))}
       <primitive object={cargo.stack} />
       <primitive object={cargo.base} />
-      <MapLayer progress={smooth} routes={routes} departures={departures} labels={labelRefs} />
+      <MapLayer progress={progress} still={still} stillAt={stillAt} routes={routes} departures={departures} labels={labelRefs} />
     </group>
   )
 }
 
-export default function DispatchScene({ progress, still = false, stillAt, labels }: { progress: Progress; still?: boolean; stillAt?: number; labels: SceneLabels }) {
-  const wrap = useRef<HTMLDivElement>(null)
-  const [visible, setVisible] = useState(true)
-  const [small, setSmall] = useState(false)
-  const [dpr, setDpr] = useState(1.5)
+export default function DispatchScene({
+  progress,
+  still = false,
+  stillAt,
+  labels,
+  renderFrame,
+}: {
+  progress: Progress
+  still?: boolean
+  stillAt?: number
+  labels: SceneLabels
+  /** When given, the parent's master loop renders frames (one rAF loop for scroll, cards and scene). */
+  renderFrame?: MutableRefObject<((timestamp: number) => void) | null>
+}) {
+  const [maxDpr, setMaxDpr] = useState(1.5)
+  const [dpr, setDpr] = useState(1)
   const labelRefs = useRef<(HTMLDivElement | null)[]>([])
 
-  // Only render frames while the hero is on screen
+  // cap the pixel ratio: 2 on larger screens, 1.5 on phones
   useEffect(() => {
-    setSmall(window.matchMedia('(max-width: 760px)').matches)
-    const el = wrap.current
-    if (!el) return
-    const io = new IntersectionObserver(([e]) => setVisible(e.isIntersecting), { rootMargin: '100px' })
-    io.observe(el)
-    return () => io.disconnect()
+    const cap = window.matchMedia('(max-width: 760px)').matches ? 1.5 : 2
+    const max = Math.min(window.devicePixelRatio || 1, cap)
+    setMaxDpr(max)
+    setDpr(max)
   }, [])
 
+  useEffect(() => {
+    if (!renderFrame) return
+    return () => {
+      renderFrame.current = null
+    }
+  }, [renderFrame])
+
   return (
-    <div ref={wrap} style={{ position: 'absolute', inset: 0 }}>
+    <div style={{ position: 'absolute', inset: 0 }}>
       <Canvas
-        frameloop={still ? 'demand' : visible ? 'always' : 'never'}
-        dpr={small ? Math.min(dpr, 1.5) : dpr}
+        frameloop={still ? 'demand' : renderFrame ? 'never' : 'always'}
+        dpr={dpr}
         camera={{ fov: 36, position: [2, 3, -6], near: 0.03, far: 500 }}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance', toneMapping: THREE.NeutralToneMapping }}
+        onCreated={(state) => {
+          if (renderFrame) renderFrame.current = (time) => state.advance(time)
+        }}
       >
-        <PerformanceMonitor onIncline={() => setDpr(Math.min(2, window.devicePixelRatio))} onDecline={() => setDpr(1)} />
+        <PerformanceMonitor onIncline={() => setDpr(maxDpr)} onDecline={() => setDpr(Math.max(1, maxDpr * 0.67))} />
         <hemisphereLight args={['#ffffff', '#b9c3ad', 1.1]} />
         <directionalLight position={[30, 60, 25]} intensity={2.1} color="#fff6ea" />
         <directionalLight position={[-40, 25, -30]} intensity={0.6} color="#dfe8ff" />

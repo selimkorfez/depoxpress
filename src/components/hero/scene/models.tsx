@@ -41,12 +41,13 @@ export function useMaterials() {
       walkway: std({ color: '#f2c230', roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }),
       leveller: std({ color: '#3b424c', roughness: 0.5, metalness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }),
       cladding: std({ color: '#dfe3e8', roughness: 0.6, metalness: 0.2 }),
-      // dock-face pieces fade out while the camera passes through the wall
-      dockWall: std({ color: '#dfe3e8', roughness: 0.6, metalness: 0.2, transparent: true }),
-      dockBand: std({ color: '#2a3e5f', roughness: 0.55, metalness: 0.25, transparent: true }),
-      sign: new THREE.MeshBasicMaterial({ map: signTexture(), transparent: true }),
+      // dock face + roof are one-sided: solid from outside, a cutaway from inside
+      dockWall: std({ color: '#dfe3e8', roughness: 0.6, metalness: 0.2 }),
+      dockBand: std({ color: '#2a3e5f', roughness: 0.55, metalness: 0.25, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
+      sign: new THREE.MeshBasicMaterial({ map: signTexture(), transparent: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }),
       claddingDark: std({ color: '#2a3e5f', roughness: 0.55, metalness: 0.25 }),
       roof: std({ color: '#b9c1cb', roughness: 0.55, metalness: 0.35 }),
+      rooflight: std({ color: '#e9f1fb', roughness: 0.2, metalness: 0.1 }),
       concrete: std({ color: '#bdb8ae', roughness: 0.9 }),
       rack: std({ color: '#2457e6', roughness: 0.5, metalness: 0.3 }),
       beam: std({ color: '#f07c1b', roughness: 0.5, metalness: 0.3 }),
@@ -528,7 +529,7 @@ export function Lorry({ refs, m }: { refs: LorryRefs; m: Mats }) {
 /* ------------------------------------------------------------------ */
 /* Warehouse, yard and surroundings                                    */
 /* ------------------------------------------------------------------ */
-const WH = { x0: -32, x1: 32, z0: -38, z1: 0, h: 11.5 }
+export const WH = { x0: -32, x1: 32, z0: -38, z1: 0, h: 11.5 }
 const DOOR_W = 3.1
 const DOOR_H = 3.3
 
@@ -576,17 +577,17 @@ export function Warehouse({ m }: { m: Mats }) {
           <planeGeometry args={[0.12, 28]} />
         </mesh>
       ))}
-      {/* dock face wall */}
+      {/* dock face wall: outward-facing planes, so the camera can look (and move) out through it from inside */}
       {piers.map((p, i) => (
-        <mesh key={i} material={m.dockWall} position={[p.x, DOCK_H + DOOR_H / 2, 0.1]}>
-          <boxGeometry args={[p.w, DOOR_H, 0.2]} />
+        <mesh key={i} material={m.dockWall} position={[p.x, DOCK_H + DOOR_H / 2, 0.2]}>
+          <planeGeometry args={[p.w, DOOR_H]} />
         </mesh>
       ))}
-      <mesh material={m.dockWall} position={[cx, DOCK_H + DOOR_H + (WH.h - DOOR_H - DOCK_H) / 2, 0.1]}>
-        <boxGeometry args={[width, WH.h - DOOR_H - DOCK_H, 0.2]} />
+      <mesh material={m.dockWall} position={[cx, DOCK_H + DOOR_H + (WH.h + 0.2 - DOOR_H - DOCK_H) / 2, 0.2]}>
+        <planeGeometry args={[width, WH.h + 0.2 - DOOR_H - DOCK_H]} />
       </mesh>
       <mesh material={m.dockBand} position={[cx, WH.h - 0.9, 0.22]}>
-        <boxGeometry args={[width, 1.8, 0.05]} />
+        <planeGeometry args={[width, 1.8]} />
       </mesh>
       <mesh material={m.sign} position={[cx - 6, WH.h - 0.9, 0.26]}>
         <planeGeometry args={[11, 1.72]} />
@@ -603,11 +604,7 @@ export function Warehouse({ m }: { m: Mats }) {
             <planeGeometry args={[2.4, 0.6]} />
           </mesh>
           <mesh material={m.dockBand} position={[0, DOCK_H + DOOR_H + 0.1, 0.24]}>
-            <boxGeometry args={[DOOR_W + 0.3, 0.2, 0.1]} />
-          </mesh>
-          {/* roller door, rolled up */}
-          <mesh material={m.darkSteel} position={[0, DOCK_H + DOOR_H - 0.2, -0.1]} rotation={[0, 0, Math.PI / 2]}>
-            <cylinderGeometry args={[0.22, 0.22, DOOR_W, 14]} />
+            <planeGeometry args={[DOOR_W + 0.3, 0.2]} />
           </mesh>
           {/* bay number */}
           <mesh position={[0, DOCK_H + DOOR_H + 0.55, 0.23]}>
@@ -617,22 +614,21 @@ export function Warehouse({ m }: { m: Mats }) {
         </group>
       ))}
       {/* back + side walls */}
-      <mesh material={m.cladding} position={[cx, WH.h / 2, WH.z0]}>
-        <boxGeometry args={[width, WH.h, 0.2]} />
+      <mesh material={m.cladding} position={[cx, (WH.h + 0.2) / 2, WH.z0]}>
+        <boxGeometry args={[width, WH.h + 0.2, 0.2]} />
       </mesh>
       {[WH.x0, WH.x1].map((x) => (
-        <mesh key={x} material={m.cladding} position={[x, WH.h / 2, cz]}>
-          <boxGeometry args={[0.2, WH.h, depth]} />
+        <mesh key={x} material={m.cladding} position={[x, (WH.h + 0.2) / 2, cz]}>
+          <boxGeometry args={[0.2, WH.h + 0.2, depth]} />
         </mesh>
       ))}
-      {/* roof with ridge + rooflights */}
-      <mesh material={m.roof} position={[cx, WH.h + 0.1, cz]}>
-        <boxGeometry args={[width + 0.6, 0.2, depth + 0.6]} />
+      {/* roof (upward-facing, so it's open when seen from inside) + rooflights */}
+      <mesh material={m.roof} position={[cx, WH.h + 0.2, cz]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[width + 0.6, depth + 0.6]} />
       </mesh>
       {[-24, -12, 0, 12, 24].map((x) => (
-        <mesh key={x} position={[x, WH.h + 0.21, cz]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh key={x} material={m.rooflight} position={[x, WH.h + 0.21, cz]} rotation={[-Math.PI / 2, 0, 0]}>
           <planeGeometry args={[1.6, depth - 6]} />
-          <meshStandardMaterial color="#e9f1fb" roughness={0.2} metalness={0.1} />
         </mesh>
       ))}
       {/* interior racking */}

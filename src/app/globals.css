@@ -684,7 +684,7 @@ html[data-scrolled='true'] body:has(.hero3d) .site-header {
 
 .hero3d-panel {
   grid-area: 1 / 1;
-  max-width: 600px;
+  max-width: min(600px, 100%);
   display: grid;
   gap: 20px;
   pointer-events: auto;
@@ -701,12 +701,11 @@ html[data-scrolled='true'] body:has(.hero3d) .site-header {
 }
 
 .hero3d-card {
-  max-width: 440px;
+  max-width: min(440px, 100%);
   padding: 28px 30px 30px;
   border-radius: var(--radius);
-  background: rgba(255, 253, 249, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* solid (no backdrop blur): crisp while fading, and no per-frame blur over the WebGL canvas */
+  background: rgba(255, 253, 249, 0.97);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.8) inset,
     0 30px 60px -30px rgba(13, 27, 46, 0.35),
@@ -731,6 +730,13 @@ html[data-scrolled='true'] body:has(.hero3d) .site-header {
 .hero3d[data-mode='3d'] .hero3d-panel:not(.is-first) {
   opacity: 0;
   visibility: hidden;
+  pointer-events: none;
+}
+
+/* scroll-driven cards: opacity/transform/visibility are set from the master loop */
+.hero3d[data-mode='3d'] .hero3d-panel {
+  will-change: opacity, transform;
+  backface-visibility: hidden;
 }
 
 .hero3d[data-mode='still'] .hero3d-copy,
@@ -751,7 +757,8 @@ html[data-scrolled='true'] body:has(.hero3d) .site-header {
 }
 
 .hero3d-title {
-  font-size: clamp(40px, 5vw, 74px);
+  /* also limited by height so the headline + CTAs fit short laptop screens */
+  font-size: clamp(36px, min(5vw, 8.2vh), 74px);
   line-height: 0.96;
   letter-spacing: -0.035em;
   font-stretch: 118%;
@@ -974,7 +981,7 @@ html[data-scrolled='true'] .hero3d-stage::after,
     inset: -30% -20% -10%;
   }
   .hero3d-title {
-    font-size: clamp(38px, 10.5vw, 56px);
+    font-size: clamp(32px, min(10.5vw, 6.4svh), 56px);
   }
   .hero3d-card {
     padding: 20px 22px 22px;
