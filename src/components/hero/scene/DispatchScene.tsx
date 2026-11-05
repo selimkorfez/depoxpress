@@ -11,7 +11,6 @@ import {
   DOCK_H,
   HERO_BAY,
   HERO_SLOT,
-  PULL,
   SLOTS,
   T,
   TABLE,
@@ -24,22 +23,23 @@ import {
   easeOutBack,
   lerp,
   lin,
+  parkedZ,
+  poseOnRoute,
   ramp,
+  routeDistance,
   slotLocal,
-  travelled,
   type CityKey,
 } from './world'
 import {
   FORK_PALLET_Z,
   Forklift,
   HERO_STACK_H,
-  ITEM_END,
-  ITEM_START,
   Lorry,
   PALLET_H,
   PackingTable,
   PalletLoad,
   Parcel,
+  TAPE_Y,
   Warehouse,
   Yard,
   useCargoGeometries,
@@ -49,6 +49,7 @@ import {
   type ParcelRefs,
 } from './models'
 import { MapLayer, type LabelRefs } from './MapLayer'
+import { flapAngles, itemPose } from './packing'
 
 type Progress = { current: number }
 
@@ -240,35 +241,20 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
     const dist = camState.dist
 
     /* ---------------- parcel: pick, close, tape, label ---------------- */
+    // every transform below is a pure function of p — no clock, no second state
     const items = parcel.items.current
-    const drop = T.itemsDrop
-    const slice = (drop[1] - drop[0]) / items.length
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       if (!it) continue
-      const a = drop[0] + i * slice * 0.92
-      const k = ramp(p, a, a + slice * 1.25)
-      const s = ITEM_START[i]
-      const e = ITEM_END[i]
-      if (i === 3) {
-        // tissue sheet laid over the top of the products
-        it.position.set(lerp(s[0], e[0], k), lerp(s[1], e[1], k) + Math.sin(k * Math.PI) * 0.25, lerp(s[2], e[2], k))
-        it.rotation.set(0, lerp(0.4, 0, k), Math.sin(k * Math.PI) * 0.4)
-        it.scale.set(lerp(1, 2.1, k), 1, lerp(1, 2.2, k))
-        it.visible = p < T.flapsLong[1]
-      } else {
-        it.position.set(lerp(s[0], e[0], k), lerp(s[1], e[1], k) + Math.sin(k * Math.PI) * 0.32, lerp(s[2], e[2], k))
-        it.rotation.set(0, Math.sin(k * Math.PI) * 0.8, Math.sin(k * Math.PI) * 0.6)
-        it.visible = p < T.flapsLong[1] + 0.01
-      }
+      itemPose(i, p, it.position, it.rotation, it.scale)
+      // once the lid is shut the products can't be seen; stop drawing them
+      it.visible = p < T.flapsLong[1]
     }
-    const shortK = ramp(p, ...T.flapsShort)
-    const longK = ramp(p, ...T.flapsLong)
-    const wobble = still ? 0 : Math.sin(t * 2.2) * 0.05 * (1 - shortK)
-    if (parcel.left.current) parcel.left.current.rotation.z = lerp(2.05 + wobble, -Math.PI / 2, shortK)
-    if (parcel.right.current) parcel.right.current.rotation.z = lerp(-2.05 - wobble, Math.PI / 2, shortK)
-    if (parcel.front.current) parcel.front.current.rotation.x = lerp(1.95 + wobble, -Math.PI / 2, longK)
-    if (parcel.back.current) parcel.back.current.rotation.x = lerp(-1.95 - wobble, Math.PI / 2, longK)
+    const flaps = flapAngles(p)
+    if (parcel.left.current) parcel.left.current.rotation.z = flaps.short
+    if (parcel.right.current) parcel.right.current.rotation.z = -flaps.short
+    if (parcel.front.current) parcel.front.current.rotation.x = flaps.long
+    if (parcel.back.current) parcel.back.current.rotation.x = -flaps.long
 
     const tapeK = lin(p, ...T.tape)
     const tapeLen = BOX.w + 0.008
@@ -283,7 +269,7 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
       g.visible = tapeK > 0 && tapeK < 1
       const tip = -BOX.w / 2 + tapeLen * ramp(tapeK, 0.08, 0.92)
       const lift = (1 - ramp(tapeK, 0, 0.1)) * 0.25 + ramp(tapeK, 0.92, 1) * 0.25
-      g.position.set(tip, BOX.h + 0.012 + lift, 0)
+      g.position.set(tip, TAPE_Y - 0.0015 + lift, 0)
       g.rotation.set(0, 0, -0.15 + ramp(tapeK, 0.9, 1) * 0.5)
     }
     const labelK = lin(p, ...T.label)
@@ -321,29 +307,22 @@ function Rig({ progress, still, stillAt = STILL_P, labelRefs }: { progress: Prog
     if (fork.beacon.current) (fork.beacon.current.material as THREE.MeshStandardMaterial).emissiveIntensity = still ? 2 : 1 + Math.max(0, Math.sin(t * 9)) * 3
 
     /* ---------------- lorries ---------------- */
-    const pull = ramp(p, 0.555, 0.585)
     const doors = ramp(p, ...T.doors)
     const openA = Math.PI * 1.46
     for (let i = 0; i < BAY_X.length; i++) {
-      const x = BAY_X[i]
       const L = lorries[i]
       const root = L.root.current
       if (!root) continue
-      const start = departures[i]
       const r = routes[i]
-      const u = clamp01((p - start) / (T.arrive - start))
+      // one continuous function of p: parked → pulled forward → driven along the route,
+      // where distance 0 on the route is exactly the pulled-forward spot
+      const d = routeDistance(r, departures[i], p)
       let scale = 1
-      if (u > 0) {
-        const d = travelled(u, r.length)
-        const k = Math.max(0.00001, Math.min(0.99999, d / r.length))
-        r.curve.getPointAt(k, root.position)
-        const e = Math.min(0.0005, k * 0.5)
-        r.curve.getPointAt(Math.min(1, k + e), v1)
-        r.curve.getPointAt(Math.max(0, k - e), v2)
-        root.rotation.set(0, Math.atan2(v1.x - v2.x, v1.z - v2.z), 0)
+      if (d > 0) {
+        root.rotation.set(0, poseOnRoute(r, d, root.position), 0)
         scale = 1 + Math.max(0, dist / 520 - 1) * ramp(d, 40, 600)
       } else {
-        root.position.set(x, 0, TRAILER_REAR_Z + PULL * pull)
+        root.position.set(BAY_X[i], 0, parkedZ(p))
         root.rotation.set(0, 0, 0)
       }
       root.scale.setScalar(scale)

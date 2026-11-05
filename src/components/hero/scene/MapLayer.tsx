@@ -5,7 +5,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { UK, IRELAND } from '../ukGeo'
 import { GROUND } from './models'
-import { BRAND, CITIES, MOTORWAYS, ll, ramp, type Route } from './world'
+import { BRAND, CITIES, MOTORWAYS, T, ll, ramp, routeDistance, type Route } from './world'
 
 type Progress = { current: number }
 
@@ -209,10 +209,9 @@ export function MapLayer({
 
     for (let i = 0; i < routes.length; i++) {
       const r = routes[i]
-      const u = (p - departures[i]) / (0.955 - departures[i])
+      const u = (p - departures[i]) / (T.arrive - departures[i])
       const rib = routePoints[i]
-      const a = Math.log(r.length / 4)
-      const d = u <= 0 ? 0 : u >= 1 ? r.length : (r.length * (Math.exp(a * u) - 1)) / (Math.exp(a) - 1)
+      const d = routeDistance(r, departures[i], p)
       // the route is drawn up to the lorry (polyline is a touch shorter than the curve)
       rib.mat.uniforms.uReveal.value = d * (rib.total / r.length)
       rib.mat.uniforms.uWidth.value = Math.max(1.2, camDist * (r.city === 'london' ? 0.0042 : 0.0032))

@@ -3,6 +3,7 @@
 import { useMemo, type RefObject } from 'react'
 import * as THREE from 'three'
 import { BAY_X, BOX, BRAND, DOCK_H, TABLE, TABLE_TOP } from './world'
+import { ITEM_SHAPES, ITEM_START, LID_TOP, LONG_FLAP, LONG_FLAP_SPAN, LONG_HINGE_Y, SHORT_FLAP, SHORT_FLAP_SPAN, SHORT_HINGE_Y, SHORT_INSET, T_WALL } from './packing'
 import { asphaltTexture, blobTexture, cartonStackTexture, curtainTexture, floorTexture, kraftTexture, labelTexture, canvasTexture } from './textures'
 
 type G = RefObject<THREE.Group | null>
@@ -79,26 +80,26 @@ export type ParcelRefs = {
   items: RefObject<(THREE.Mesh | null)[]>
 }
 
-const T_WALL = 0.008
-const FLAP = BOX.d / 2
-
 export function Parcel({ refs, m }: { refs: ParcelRefs; m: Mats }) {
   const { w, d, h } = BOX
   const productMats = useMemo(
     () => [
       new THREE.MeshStandardMaterial({ color: BRAND.navy, roughness: 0.4 }),
-      new THREE.MeshStandardMaterial({ color: '#e8eef9', roughness: 0.3 }),
       new THREE.MeshStandardMaterial({ color: BRAND.signal, roughness: 0.35 }),
+      new THREE.MeshStandardMaterial({ color: '#e8eef9', roughness: 0.3 }),
       new THREE.MeshStandardMaterial({ color: '#f7e7c8', roughness: 0.8 }),
     ],
     [],
   )
-  const tapeGeo = useMemo(() => new THREE.BoxGeometry(1, 0.0025, 0.05).translate(0.5, 0, 0), [])
+  const tapeGeo = useMemo(() => new THREE.BoxGeometry(1, TAPE_T, 0.05).translate(0.5, 0, 0), [])
+  const tapeY = LID_TOP + 0.0005 + TAPE_T / 2
+  const tabH = 0.08
   return (
     <group ref={refs.root}>
-      {/* walls */}
+      {/* walls: front/back run the full width, the ends fit between them and the floor sits
+          inside — solid pieces that only touch, so no two visible faces share a plane */}
       <mesh material={m.kraft} position={[0, T_WALL / 2, 0]}>
-        <boxGeometry args={[w, T_WALL, d]} />
+        <boxGeometry args={[w - 2 * T_WALL, T_WALL, d - 2 * T_WALL]} />
       </mesh>
       <mesh material={m.kraft} position={[0, h / 2, d / 2 - T_WALL / 2]}>
         <boxGeometry args={[w, h, T_WALL]} />
@@ -107,39 +108,40 @@ export function Parcel({ refs, m }: { refs: ParcelRefs; m: Mats }) {
         <boxGeometry args={[w, h, T_WALL]} />
       </mesh>
       <mesh material={m.kraft} position={[w / 2 - T_WALL / 2, h / 2, 0]}>
-        <boxGeometry args={[T_WALL, h, d]} />
+        <boxGeometry args={[T_WALL, h, d - 2 * T_WALL]} />
       </mesh>
       <mesh material={m.kraft} position={[-w / 2 + T_WALL / 2, h / 2, 0]}>
-        <boxGeometry args={[T_WALL, h, d]} />
+        <boxGeometry args={[T_WALL, h, d - 2 * T_WALL]} />
       </mesh>
-      {/* flaps (hinged at the rim) — short end flaps sit just under the long ones */}
-      <group ref={refs.front} position={[0, h + 0.004, d / 2 - T_WALL / 2]}>
-        <mesh material={m.kraft} position={[0, FLAP / 2, 0]}>
-          <boxGeometry args={[w, FLAP, T_WALL]} />
+      {/* flaps: one mesh each, hinged on the outer top edge, modelled closed (pointing inwards);
+          the only thing that moves them is the hinge angle from flapAngles(p) */}
+      <group ref={refs.front} position={[0, LONG_HINGE_Y, d / 2]}>
+        <mesh material={m.kraft} position={[0, T_WALL / 2, -LONG_FLAP / 2]}>
+          <boxGeometry args={[LONG_FLAP_SPAN, T_WALL, LONG_FLAP]} />
         </mesh>
       </group>
-      <group ref={refs.back} position={[0, h + 0.004, -d / 2 + T_WALL / 2]}>
-        <mesh material={m.kraft} position={[0, FLAP / 2, 0]}>
-          <boxGeometry args={[w, FLAP, T_WALL]} />
+      <group ref={refs.back} position={[0, LONG_HINGE_Y, -d / 2]}>
+        <mesh material={m.kraft} position={[0, T_WALL / 2, LONG_FLAP / 2]}>
+          <boxGeometry args={[LONG_FLAP_SPAN, T_WALL, LONG_FLAP]} />
         </mesh>
       </group>
-      <group ref={refs.left} position={[-w / 2 + T_WALL / 2, h - 0.004, 0]}>
-        <mesh material={m.kraft} position={[0, FLAP * 0.9 / 2, 0]}>
-          <boxGeometry args={[T_WALL, FLAP * 0.9, d - 0.01]} />
+      <group ref={refs.left} position={[-w / 2, SHORT_HINGE_Y, 0]}>
+        <mesh material={m.kraft} position={[SHORT_INSET + SHORT_FLAP / 2, T_WALL / 2, 0]}>
+          <boxGeometry args={[SHORT_FLAP, T_WALL, SHORT_FLAP_SPAN]} />
         </mesh>
       </group>
-      <group ref={refs.right} position={[w / 2 - T_WALL / 2, h - 0.004, 0]}>
-        <mesh material={m.kraft} position={[0, FLAP * 0.9 / 2, 0]}>
-          <boxGeometry args={[T_WALL, FLAP * 0.9, d - 0.01]} />
+      <group ref={refs.right} position={[w / 2, SHORT_HINGE_Y, 0]}>
+        <mesh material={m.kraft} position={[-SHORT_INSET - SHORT_FLAP / 2, T_WALL / 2, 0]}>
+          <boxGeometry args={[SHORT_FLAP, T_WALL, SHORT_FLAP_SPAN]} />
         </mesh>
       </group>
-      {/* tape: a strip that grows along the seam, with tabs folded over each end */}
-      <mesh ref={refs.tape} geometry={tapeGeo} material={m.tape} position={[-w / 2 - 0.004, h + 0.0135, 0]} scale={[0.0001, 1, 1]} />
-      <mesh ref={refs.tapeEndA} material={m.tape} position={[-w / 2 - 0.0035, h - 0.035, 0]} visible={false}>
-        <boxGeometry args={[0.0025, 0.08, 0.05]} />
+      {/* tape: a strip that grows along the seam, with tabs folded down each end */}
+      <mesh ref={refs.tape} geometry={tapeGeo} material={m.tape} position={[-w / 2 - 0.004, tapeY, 0]} scale={[0.0001, 1, 1]} />
+      <mesh ref={refs.tapeEndA} material={m.tape} position={[-w / 2 - 0.0035, tapeY + TAPE_T / 2 - tabH / 2, 0]} visible={false}>
+        <boxGeometry args={[TAPE_T, tabH, 0.05]} />
       </mesh>
-      <mesh ref={refs.tapeEndB} material={m.tape} position={[w / 2 + 0.0035, h - 0.035, 0]} visible={false}>
-        <boxGeometry args={[0.0025, 0.08, 0.05]} />
+      <mesh ref={refs.tapeEndB} material={m.tape} position={[w / 2 + 0.0035, tapeY + TAPE_T / 2 - tabH / 2, 0]} visible={false}>
+        <boxGeometry args={[TAPE_T, tabH, 0.05]} />
       </mesh>
       {/* tape gun */}
       <group ref={refs.gun} visible={false}>
@@ -161,39 +163,25 @@ export function Parcel({ refs, m }: { refs: ParcelRefs; m: Mats }) {
         <planeGeometry args={[0.24, 0.16]} />
       </mesh>
       {/* products that get picked into the box */}
-      {[
-        { geo: <boxGeometry args={[0.17, 0.11, 0.12]} />, mat: productMats[0] },
-        { geo: <boxGeometry args={[0.12, 0.16, 0.09]} />, mat: productMats[2] },
-        { geo: <cylinderGeometry args={[0.045, 0.045, 0.19, 24]} />, mat: productMats[1] },
-        { geo: <boxGeometry args={[0.2, 0.02, 0.14]} />, mat: productMats[3] },
-      ].map((it, i) => (
+      {ITEM_SHAPES.map((it, i) => (
         <mesh
           key={i}
           ref={(el) => {
             if (refs.items.current) refs.items.current[i] = el
           }}
-          material={it.mat}
+          material={productMats[i]}
+          position={ITEM_START[i]}
         >
-          {it.geo}
+          {it.kind === 'box' ? <boxGeometry args={it.size} /> : <cylinderGeometry args={[it.r, it.r, it.h, 24]} />}
         </mesh>
       ))}
     </group>
   )
 }
 
-/** Where each product sits on the table, and where it ends up inside the box (parcel-local). */
-export const ITEM_START: [number, number, number][] = [
-  [-0.5, 0.055, 0.12],
-  [-0.56, 0.08, -0.12],
-  [-0.74, 0.095, 0.06],
-  [-0.38, 0.01, -0.24],
-]
-export const ITEM_END: [number, number, number][] = [
-  [-0.12, 0.065, 0.06],
-  [0.13, 0.09, -0.07],
-  [0.14, 0.105, 0.09],
-  [0, 0.25, 0],
-]
+/** Height of the tape strip above the closed lid (the gun rides on it). */
+export const TAPE_T = 0.0025
+export const TAPE_Y = LID_TOP + 0.0005 + TAPE_T / 2
 
 /* ------------------------------------------------------------------ */
 /* Packing bench                                                       */

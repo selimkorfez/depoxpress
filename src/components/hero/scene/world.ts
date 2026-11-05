@@ -195,12 +195,48 @@ export const MOTORWAYS: [number, number][][] = [
   [[51.6, -0.5], [51.75, -1.05], [52.05, -1.35], [52.3, -1.58], [52.45, -1.75]],
 ]
 
-/** Distance travelled along a route for a given local time 0..1 — exponential, so the lorry keeps pace with the zooming camera. */
+/** Share of the route time spent pulling away from rest (see travelled). */
+const PULL_AWAY = 0.04
+
+/**
+ * Distance travelled along a route for a given local time 0..1. It starts from
+ * rest (a short C¹ ease-in) and then grows exponentially, so the lorry keeps
+ * pace with the zooming camera. travelled(0) is exactly 0 — the parked spot.
+ */
 export function travelled(u: number, length: number) {
   if (u <= 0) return 0
   if (u >= 1) return length
+  const s = (u < PULL_AWAY ? (u * u) / (2 * PULL_AWAY) : u - PULL_AWAY / 2) / (1 - PULL_AWAY / 2)
   const a = Math.log(length / 4)
-  return (length * (Math.exp(a * u) - 1)) / (Math.exp(a) - 1)
+  return (length * (Math.exp(a * s) - 1)) / (Math.exp(a) - 1)
+}
+
+/** Metres a lorry that departs at `start` has driven along `route` by progress p (0 until it leaves). */
+export function routeDistance(route: Route, start: number, p: number) {
+  return travelled(clamp01((p - start) / (T.arrive - start)), route.length)
+}
+
+const _ahead = new THREE.Vector3()
+const _behind = new THREE.Vector3()
+/**
+ * Position at distance d (metres) along a route, returning the heading. Samples
+ * by arc length (CurvePath.getPoint) with no minimum clamp, so d = 0 is exactly
+ * the route start — the spot the lorry was parked on — and every later frame
+ * continues from there.
+ */
+export function poseOnRoute(route: Route, d: number, pos: THREE.Vector3) {
+  const L = route.length
+  route.curve.getPoint(clamp01(d / L), pos)
+  const e = 0.5 + d * 0.004
+  route.curve.getPoint(clamp01((d + e) / L), _ahead)
+  route.curve.getPoint(clamp01((d - e) / L), _behind)
+  return Math.atan2(_ahead.x - _behind.x, _ahead.z - _behind.z)
+}
+
+/** Where a lorry stands before it departs: backed onto its bay, then pulled forward PULL m (ends exactly at its route start). */
+export const PULL_WINDOW = [0.555, 0.585] as const
+export function parkedZ(p: number) {
+  return TRAILER_REAR_Z + PULL * ramp(p, ...PULL_WINDOW)
 }
 
 export const departStart = (bay: number) => {
